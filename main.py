@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 
 API_KEY = os.environ["WRAPPER_API_KEY"]          # thor must send: Authorization: Bearer <API_KEY>
+VLLM_API_KEY = os.environ["VLLM_API_KEY"]
 CALLBACK_URL = os.environ["CALLBACK_URL"]        # set once; every result is POSTed here
 VLLM_URL = os.environ.get("VLLM_URL")
 MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT"))
@@ -18,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
  
 app = FastAPI()
-vllm = AsyncOpenAI(base_url=VLLM_URL, api_key="EMPTY", timeout=VLLM_TIMEOUT)
+vllm = AsyncOpenAI(base_url=VLLM_URL, api_key=VLLM_API_KEY, timeout=VLLM_TIMEOUT)
 http = httpx.AsyncClient(timeout=30)
 sem = asyncio.Semaphore(MAX_INFLIGHT)
 inflight = {}   # lead_id -> start time
