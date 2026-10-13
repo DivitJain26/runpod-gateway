@@ -13,7 +13,8 @@ CALLBACK_URL = os.environ["CALLBACK_URL"]        # set once; every result is POS
 VLLM_URL = os.environ.get("VLLM_URL")
 MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT"))
 VLLM_TIMEOUT = float(os.environ.get("VLLM_TIMEOUT"))
- 
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
  
 app = FastAPI()
@@ -74,8 +75,8 @@ async def infer(request: Request):
   check_auth(request)
   body = await request.json()
   lead_id = body.get("lead_id")
-  if not lead_id or not body.get("messages"):
-    raise HTTPException(status_code=400, detail="lead_id and messages are required")
+  if not lead_id or not body.get("messages") or not body.get("model"):
+    raise HTTPException(status_code=400, detail="lead_id, model and messages are required")
   if lead_id in inflight:
     raise HTTPException(status_code=409, detail="lead_id already in flight")
   inflight[lead_id] = time.time()
