@@ -10,7 +10,6 @@ from openai import AsyncOpenAI
 
 API_KEY = os.environ["WRAPPER_API_KEY"]          # thor must send: Authorization: Bearer <API_KEY>
 CALLBACK_URL = os.environ["CALLBACK_URL"]        # set once; every result is POSTed here
-MODEL = os.environ.get("MODEL")
 VLLM_URL = os.environ.get("VLLM_URL")
 MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT"))
 VLLM_TIMEOUT = float(os.environ.get("VLLM_TIMEOUT"))
