@@ -2,13 +2,12 @@ import os
 import time
 import asyncio
 import logging
- 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
 from openai import AsyncOpenAI
 
 
-API_KEY = os.environ["WRAPPER_API_KEY"]          # thor must send: Authorization: Bearer <API_KEY>
+GATEWAY_API_KEY = os.environ["GATEWAY_API_KEY"]          # thor must send: Authorization: Bearer <GATEWAY_API_KEY>
 VLLM_API_KEY = os.environ["VLLM_API_KEY"]
 CALLBACK_URL = os.environ["CALLBACK_URL"]        # set once; every result is POSTed here
 VLLM_URL = os.environ.get("VLLM_URL")
@@ -28,7 +27,7 @@ tasks = set()   # keep task refs so they are not garbage collected
 
 def check_auth(request):
   auth = request.headers.get("authorization", "")
-  if auth != "Bearer {}".format(API_KEY):
+  if auth != "Bearer {}".format(GATEWAY_API_KEY):
     raise HTTPException(status_code=401, detail="unauthorized")
 
 
@@ -61,7 +60,7 @@ async def run_inference(lead_id, body):
 async def send_callback(payload):
   for attempt in range(3):
     try:
-      resp = await http.post(CALLBACK_URL, json=payload, headers={"Authorization": "Bearer {}".format(API_KEY)})
+      resp = await http.post(CALLBACK_URL, json=payload, headers={"Authorization": "Bearer {}".format(GATEWAY_API_KEY)})
       if resp.status_code < 300:
         return
       logger.error("Callback rejected for lead_id=%s: HTTP %s, response body: %s", payload["lead_id"], resp.status_code, resp.text)
