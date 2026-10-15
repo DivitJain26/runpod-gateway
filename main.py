@@ -74,7 +74,7 @@ async def send_callback(payload):
     except Exception as e:
       logger.warning("Callback error lead_id=%s attempt=%s error=%s", lead_id, attempt, e)
     if attempt < CALLBACK_ATTEMPTS:
-      await asyncio.sleep(2 * attempt)
+      await asyncio.sleep(2 ** attempt)
   logger.error("Callback permanently failed lead_id=%s", lead_id)
 
 
