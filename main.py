@@ -12,9 +12,9 @@ from openai import AsyncOpenAI
 GATEWAY_API_KEY = os.environ["GATEWAY_API_KEY"]
 VLLM_API_KEY = os.environ["VLLM_API_KEY"]
 CALLBACK_URL = os.environ["CALLBACK_URL"]
-VLLM_URL = os.environ.get("VLLM_URL")
-MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT"))
-VLLM_TIMEOUT = float(os.environ.get("VLLM_TIMEOUT"))
+VLLM_URL = os.environ["VLLM_URL"]
+MAX_INFLIGHT = int(os.environ["MAX_INFLIGHT"])
+VLLM_TIMEOUT = float(os.environ["VLLM_TIMEOUT"])
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,8 +47,8 @@ async def run_inference(lead_id, body):
       payload = resp.model_dump()
       payload["lead_id"] = lead_id
       payload["status"] = "ok"
-      payload["inference_time_s"] = round(time.time() - t_start, 2)
-      logger.info("done lead_id=%s inference=%.1fs tokens=%s", lead_id, payload["inference_time_s"], resp.usage.completion_tokens if resp.usage else "?")
+      payload["total_time_s"] = round(time.time() - t_start, 2)
+      logger.info("done lead_id=%s total_time_s=%.1fs tokens=%s", lead_id, payload["total_time_s"], resp.usage.completion_tokens if resp.usage else "?")
   except Exception as e:
     logger.exception("inference failed lead_id=%s", lead_id)
     payload["status"] = "error"
@@ -104,4 +104,4 @@ async def health(request: Request):
     return JSONResponse({"status": "vllm_not_ready", "error": str(e),}, status_code=503)
   if not models:
     return JSONResponse({"status": "no_model"}, status_code=503)
-  return {"status": "ok", "models": models}
+  return {"status": "ok", "models": models, "inflight": len(inflight)}
