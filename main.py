@@ -36,8 +36,8 @@ def check_auth(request):
     raise HTTPException(status_code=401, detail="unauthorized")
 
 
-async def run_inference(lead_id, body):
-  payload = {"lead_id": lead_id}
+async def run_inference(lead_id, company_id, body):
+  payload = {"lead_id": lead_id, "company_id": company_id}
   params = {k: body[k] for k in OPTIONAL_PARAMS if k in body}
   t_accepted = time.time()
   try:
@@ -46,16 +46,17 @@ async def run_inference(lead_id, body):
       resp = await vllm.chat.completions.create(model=body["model"], messages=body["messages"], **params)
       payload = resp.model_dump()
       payload["lead_id"] = lead_id
+      payload["company_id"] = company_id
       payload["status"] = "ok"
-      payload["total_time_s"] = round(time.time() - t_start, 2)
-      logger.info("done lead_id=%s total_time_s=%.1fs tokens=%s", lead_id, payload["total_time_s"], resp.usage.completion_tokens if resp.usage else "?")
+      payload["inference_time_s"] = round(time.time() - t_start, 2)
+      logger.info("Inference completed for company_id=%s lead_id=%s inference_time_s=%s tokens=%s", company_id, lead_id, payload["inference_time_s"], resp.usage.completion_tokens if resp.usage else "?")
   except Exception as e:
-    logger.exception("inference failed lead_id=%s", lead_id)
+    logger.exception("inference failed company_id=%s lead_id=%s", company_id, lead_id)
     payload["status"] = "error"
     payload["error"] = str(e)
   finally:
     inflight.pop(lead_id, None)
-  payload["total_s"] = round(time.time() - t_accepted, 2)
+  payload["total_time_s"] = round(time.time() - t_accepted, 2)
   await send_callback(payload)
 
 
@@ -83,16 +84,17 @@ async def infer(request: Request):
   check_auth(request)
   body = await request.json()
   lead_id = body.get("lead_id")
-  if not lead_id or not body.get("messages") or not body.get("model"):
-    raise HTTPException(status_code=400, detail="lead_id, model and messages are required")
+  company_id = body.get("company_id")
+  if not lead_id or not company_id or not body.get("messages") or not body.get("model"):
+    raise HTTPException(status_code=400, detail="lead_id, company_id, model and messages are required")
   if lead_id in inflight:
     raise HTTPException(status_code=409, detail="lead_id already in flight")
   inflight[lead_id] = time.time()
-  logger.info("Request accepted lead_id=%s inflight=%s", lead_id, len(inflight))
-  task = asyncio.create_task(run_inference(lead_id, body))
+  logger.info("Request accepted company_id=%s lead_id=%s inflight=%s", company_id, lead_id, len(inflight))
+  task = asyncio.create_task(run_inference(lead_id, company_id, body))
   tasks.add(task)
   task.add_done_callback(tasks.discard)
-  return {"lead_id": lead_id, "status": "accepted"}
+  return {"lead_id": lead_id, "company_id": company_id, "status": "accepted"}
  
  
 @app.get("/health")
@@ -101,7 +103,7 @@ async def health(request: Request):
   try:
     models = [m.id for m in (await vllm.models.list(timeout=5)).data]
   except Exception as e:
-    return JSONResponse({"status": "vllm_not_ready", "error": str(e),}, status_code=503)
+    return JSONResponse({"status": "vllm_not_ready", "error": str(e)}, status_code=503)
   if not models:
     return JSONResponse({"status": "no_model"}, status_code=503)
   return {"status": "ok", "models": models, "inflight": len(inflight)}
