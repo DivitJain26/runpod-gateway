@@ -3,13 +3,15 @@ import time
 import asyncio
 import logging
 import httpx
+import hmac
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 
-GATEWAY_API_KEY = os.environ["GATEWAY_API_KEY"]          # thor must send: Authorization: Bearer <GATEWAY_API_KEY>
+GATEWAY_API_KEY = os.environ["GATEWAY_API_KEY"]
 VLLM_API_KEY = os.environ["VLLM_API_KEY"]
-CALLBACK_URL = os.environ["CALLBACK_URL"]        # set once; every result is POSTed here
+CALLBACK_URL = os.environ["CALLBACK_URL"]
 VLLM_URL = os.environ.get("VLLM_URL")
 MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT"))
 VLLM_TIMEOUT = float(os.environ.get("VLLM_TIMEOUT"))
@@ -24,50 +26,56 @@ sem = asyncio.Semaphore(MAX_INFLIGHT)
 inflight = {}   # lead_id -> start time
 tasks = set()   # keep task refs so they are not garbage collected
 
+OPTIONAL_PARAMS = ("max_tokens", "temperature", "reasoning_effort")
+CALLBACK_ATTEMPTS = 5
+
 
 def check_auth(request):
   auth = request.headers.get("authorization", "")
-  if auth != "Bearer {}".format(GATEWAY_API_KEY):
+  if not hmac.compare_digest(auth, "Bearer {}".format(GATEWAY_API_KEY)):
     raise HTTPException(status_code=401, detail="unauthorized")
 
 
 async def run_inference(lead_id, body):
   payload = {"lead_id": lead_id}
+  params = {k: body[k] for k in OPTIONAL_PARAMS if k in body}
+  t_accepted = time.time()
   try:
     async with sem:
-      t0 = time.time()
-      resp = await vllm.chat.completions.create(
-        model=body.get("model"),
-        messages=body["messages"],
-        max_tokens=body.get("max_tokens"),
-        temperature=body.get("temperature"),
-        reasoning_effort=body.get("reasoning_effort"),
-      )
+      t_start = time.time()
+      resp = await vllm.chat.completions.create(model=body["model"], messages=body["messages"], **params)
       payload = resp.model_dump()
       payload["lead_id"] = lead_id
       payload["status"] = "ok"
-      logger.info("done lead_id=%s took=%.1fs tokens=%s", lead_id, time.time() - t0, resp.usage.completion_tokens if resp.usage else "?")
+      payload["inference_time_s"] = round(time.time() - t_start, 2)
+      logger.info("done lead_id=%s inference=%.1fs tokens=%s", lead_id, payload["inference_time_s"], resp.usage.completion_tokens if resp.usage else "?")
   except Exception as e:
     logger.exception("inference failed lead_id=%s", lead_id)
-    payload["lead_id"] = lead_id
     payload["status"] = "error"
     payload["error"] = str(e)
   finally:
     inflight.pop(lead_id, None)
+  payload["total_s"] = round(time.time() - t_accepted, 2)
   await send_callback(payload)
 
 
 async def send_callback(payload):
-  for attempt in range(3):
+  lead_id = payload["lead_id"]
+  headers = {"Authorization": "Bearer {}".format(GATEWAY_API_KEY)}
+  for attempt in range(1, CALLBACK_ATTEMPTS + 1):
     try:
-      resp = await http.post(CALLBACK_URL, json=payload, headers={"Authorization": "Bearer {}".format(GATEWAY_API_KEY)})
+      resp = await http.post(CALLBACK_URL, json=payload, headers=headers)
       if resp.status_code < 300:
         return
-      logger.error("Callback rejected for lead_id=%s: HTTP %s, response body: %s", payload["lead_id"], resp.status_code, resp.text)
-    except Exception:
-      logger.exception("Callback request raised an error for lead_id=%s (attempt %s)", payload["lead_id"], attempt)
-    await asyncio.sleep(2 * (attempt + 1))
-  logger.error("Callback permanently failed for lead_id=%s", payload["lead_id"])
+      if resp.status_code < 500 and resp.status_code != 429:
+        logger.error("Callback rejected lead_id=%s http_status=%s body=%s", lead_id, resp.status_code, resp.text[:500])
+        return  # thor said no; the same payload will not do better next time
+      logger.warning("Callback failed lead_id=%s attempt=%s http_status=%s", lead_id, attempt, resp.status_code)
+    except Exception as e:
+      logger.warning("Callback error lead_id=%s attempt=%s error=%s", lead_id, attempt, e)
+    if attempt < CALLBACK_ATTEMPTS:
+      await asyncio.sleep(2 * attempt)
+  logger.error("Callback permanently failed lead_id=%s", lead_id)
 
 
 @app.post("/inference", status_code=202)
@@ -88,10 +96,12 @@ async def infer(request: Request):
  
  
 @app.get("/health")
-async def health():
+async def health(request: Request):
+  check_auth(request)  
   try:
-    r = await http.get(VLLM_URL.replace("/v1", "") + "/health", timeout=5)
-    vllm_ok = r.status_code == 200
-  except Exception:
-    vllm_ok = False
-  return {"vllm": vllm_ok, "inflight": len(inflight)}
+    models = [m.id for m in (await vllm.models.list(timeout=5)).data]
+  except Exception as e:
+    return JSONResponse({"status": "vllm_not_ready", "error": str(e),}, status_code=503)
+  if not models:
+    return JSONResponse({"status": "no_model"}, status_code=503)
+  return {"status": "ok", "models": models}
