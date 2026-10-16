@@ -5,7 +5,7 @@ import logging
 import httpx
 import hmac
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responseonses import JSONResponse
+from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 
