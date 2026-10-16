@@ -5,12 +5,12 @@ import logging
 import httpx
 import hmac
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responseonses import JSONResponse
 from openai import AsyncOpenAI
 
 
 GATEWAY_API_KEY = os.environ["GATEWAY_API_KEY"]
-CALLBACK_URL = os.environ["CALLBACK_URL"]
+CALLBACK_URL_TEMPLATE = os.environ["CALLBACK_URL_TEMPLATE"]
 VLLM_URL = os.environ["VLLM_URL"]
 MAX_INFLIGHT = int(os.environ["MAX_INFLIGHT"])
 VLLM_TIMEOUT = float(os.environ["VLLM_TIMEOUT"])
@@ -42,13 +42,13 @@ async def run_inference(lead_id, company_id, body):
   try:
     async with sem:
       t_start = time.time()
-      resp = await vllm.chat.completions.create(model=body["model"], messages=body["messages"], **params)
-      payload = resp.model_dump()
+      response = await vllm.chat.completions.create(model=body["model"], messages=body["messages"], **params)
+      payload = response.model_dump()
       payload["lead_id"] = lead_id
       payload["company_id"] = company_id
       payload["status"] = "ok"
       payload["inference_time_s"] = round(time.time() - t_start, 2)
-      logger.info("Inference completed for company_id=%s lead_id=%s inference_time_s=%s tokens=%s", company_id, lead_id, payload["inference_time_s"], resp.usage.completion_tokens if resp.usage else "?")
+      logger.info("Inference completed for company_id=%s lead_id=%s inference_time_s=%s tokens=%s", company_id, lead_id, payload["inference_time_s"], response.usage.completion_tokens if response.usage else "?")
   except Exception as e:
     logger.exception("inference failed company_id=%s lead_id=%s", company_id, lead_id)
     payload["status"] = "error"
@@ -61,21 +61,22 @@ async def run_inference(lead_id, company_id, body):
 
 async def send_callback(payload):
   lead_id = payload["lead_id"]
-  headers = {"Authorization": "Bearer {}".format(GATEWAY_API_KEY)}
+  company_id = payload["company_id"]
+  url = CALLBACK_URL_TEMPLATE.format(company_id=company_id, lead_id=lead_id)
   for attempt in range(1, CALLBACK_ATTEMPTS + 1):
     try:
-      resp = await http.post(CALLBACK_URL, json=payload, headers=headers)
-      if resp.status_code < 300:
+      response = await http.post(url, json=payload)
+      if response.status_code < 300:
         return
-      if resp.status_code < 500 and resp.status_code != 429:
-        logger.error("Callback rejected lead_id=%s http_status=%s body=%s", lead_id, resp.status_code, resp.text[:500])
-        return  # thor said no; the same payload will not do better next time
-      logger.warning("Callback failed lead_id=%s attempt=%s http_status=%s", lead_id, attempt, resp.status_code)
+      if response.status_code < 500 and response.status_code != 429:
+        logger.error("Callback rejected company_id=%s lead_id=%s http_status=%s body=%s", company_id, lead_id, response.status_code, response.text[:500])
+        return
+      logger.warning("Callback failed company_id=%s lead_id=%s attempt=%s http_status=%s", company_id, lead_id, attempt, response.status_code)
     except Exception as e:
-      logger.warning("Callback error lead_id=%s attempt=%s error=%s", lead_id, attempt, e)
+      logger.warning("Callback error company_id=%s lead_id=%s attempt=%s error=%s", company_id, lead_id, attempt, e)
     if attempt < CALLBACK_ATTEMPTS:
       await asyncio.sleep(2 ** attempt)
-  logger.error("Callback permanently failed lead_id=%s", lead_id)
+  logger.error("Callback permanently failed company_id=%s lead_id=%s", company_id, lead_id)
 
 
 @app.post("/inference", status_code=202)
